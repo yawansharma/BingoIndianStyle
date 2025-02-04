@@ -1,0 +1,37 @@
+import 'package:bingo_indian_style/firebase_options.dart';
+import 'package:bingo_indian_style/pages/create_join.dart';
+import 'package:bingo_indian_style/pages/login.dart';
+import 'package:bingo_indian_style/pages/main_page.dart';
+import 'package:bingo_indian_style/pages/cover_page.dart';
+import 'package:bingo_indian_style/pages/play_page.dart';
+import 'package:bingo_indian_style/pages/signup.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/material.dart';
+// import 'package:firebase_core/firebase_core.dart';
+// import 'firebase_options.dart';
+
+class Bingo extends StatelessWidget {
+  const Bingo({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      initialRoute: '/2',
+      routes: {
+        '/': (context) => const BingoMainPage(),
+        '/first': (context) => const BingoCoverPage(),
+        '/second': (context) => BingoPlayPage(),
+        '/1': (context) => const SignupPage(),
+        '/2': (context) => const LoginPage(),
+        '/3': (context) => const CreateJoin(),
+      },
+    );
+  }
+}
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+  runApp(const Bingo());
+}

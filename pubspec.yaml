@@ -1,0 +1,42 @@
+name: bingo_indian_style
+description: "A new Flutter project."
+publish_to: "none"
+version: 0.1.0
+
+environment:
+  sdk: ^3.5.3
+
+dependencies:
+  flutter:
+    sdk: flutter
+  blinking_text: ^1.0.4
+  firebase_core: ^3.10.1
+  firebase_auth: ^5.4.1
+  cloud_firestore: ^5.6.2
+  firebase_storage: ^12.4.0
+  firebase_analytics: ^11.4.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+  fonts:
+    - family: PurplePurse
+      fonts:
+        - asset: assets\fonts\PurplePurse-Regular.ttf
+
+    - family: Rammetto
+      fonts:
+        - asset: assets\fonts\RammettoOne-Regular.ttf
+    #       - asset: fonts/Schyler-Italic.ttf
+    #         style: italic
+    - family: Qahiri
+      fonts:
+        - asset: assets\fonts\Qahiri-Regular.ttf
+
+    - family: MajorMono
+      fonts:
+        - asset: assets\fonts\MajorMonoDisplay-Regular.ttf
