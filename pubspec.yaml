@@ -8,7 +8,7 @@ environment:
 
 dependencies:
   flutter:
-    sdk: ">=2.19.2 <4.0.0"
+    sdk: flutter
   blinking_text: ^1.0.4
   firebase_core: ^3.10.1
   firebase_auth: ^5.4.1
