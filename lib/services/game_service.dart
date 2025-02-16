@@ -14,20 +14,23 @@ class GameService {
   final _firestore = FirebaseFirestore.instance;
 
   int RoomNum() {
-    int roomNum = Random().nextInt(100);
+    int roomNum = Random().nextInt(1000);
     return roomNum;
   }
 
-  void createRoom(int roomId, int size) async {
+  void createRoom(int roomId, int size, int maxPlayers) async {
     try {
+      User? user = _auth.currentUser;
+      if (user == null) return;
+
+      String hostId = user.uid;
+      String hostName = user.displayName ?? "Unknown Player";
+
       CollectionReference collectionReference =
           FirebaseFirestore.instance.collection('gameRooms');
 
       List<int> numbers = List.generate(size * size, (index) => index + 1)
         ..shuffle();
-
-      // List<List<int>> gridNumbers = List.generate(
-      //     size, (row) => numbers.sublist(row * size, (row + 1) * size));
 
       Map<String, bool> availableSquares = {
         for (var num in numbers) num.toString(): false
@@ -38,10 +41,20 @@ class GameService {
         'gridSize': size,
         'gridNumbers': numbers,
         'availableSquares': availableSquares,
-        'players': [],
+        'noOfPlayers': maxPlayers,
+        'players': [hostId],
+        'playerNames': {hostId: hostName},
+        'gameStarted': false,
+        'gamePaused': true,
+        'currentTurn': 0,
+        'bingoReactionTimes': {},
+        'spectators': []
       });
+
+      print(
+          "Room $roomId created by host: $hostName ($hostId), waiting for players...");
     } catch (e) {
-      print('Couldnt Create Room: $e');
+      print('Could not create room: $e');
     }
   }
 
@@ -51,29 +64,37 @@ class GameService {
           .collection('gameRooms')
           .doc('$roomId')
           .get();
-      UserJoinRoom(roomId);
-      final int size = doc['gridSize'];
-      if (size == 5) {
-        Navigator.of(context)
-            .pushReplacement(MaterialPageRoute(builder: (context) {
-          return FiveByFive(roomId: roomId);
-        }));
-      } else if (size == 6) {
-        Navigator.of(context)
-            .pushReplacement(MaterialPageRoute(builder: (context) {
-          return SixBySix();
-        }));
-      } else if (size == 7) {
-        Navigator.of(context)
-            .pushReplacement(MaterialPageRoute(builder: (context) {
-          return SevenBySeven();
-        }));
-      } else if (size == 8) {
-        Navigator.of(context)
-            .pushReplacement(MaterialPageRoute(builder: (context) {
-          return EightByEight();
-        }));
+
+      if (!doc.exists) {
+        print("Room does not exist.");
+        return;
       }
+
+      UserJoinRoom(roomId); // Add the player to the game
+
+      final int size = doc['gridSize'];
+      Widget gameScreen;
+
+      switch (size) {
+        case 5:
+          gameScreen = FiveByFive(roomId: roomId);
+          break;
+        case 6:
+          gameScreen = const SixBySix();
+          break;
+        case 7:
+          gameScreen = const SevenBySeven();
+          break;
+        case 8:
+          gameScreen = const EightByEight();
+          break;
+        default:
+          print("Invalid grid size.");
+          return;
+      }
+
+      Navigator.of(context)
+          .pushReplacement(MaterialPageRoute(builder: (context) => gameScreen));
     } catch (e) {
       print('Unable to join: $e');
     }
@@ -94,7 +115,11 @@ class GameService {
   }
 
   void UserJoinRoom(int roomNo) async {
-    String userId = _auth.currentUser?.uid ?? "";
+    User? user = _auth.currentUser;
+    if (user == null) return;
+
+    String userId = user.uid;
+    String userName = user.displayName ?? "Unknown Player";
 
     DocumentReference roomRef =
         _firestore.collection('gameRooms').doc(roomNo.toString());
@@ -107,26 +132,102 @@ class GameService {
         return;
       }
 
-      // Handle missing 'players' array
       Map<String, dynamic> roomData = snapshot.data() as Map<String, dynamic>;
-      List<dynamic> players =
-          roomData.containsKey('players') ? roomData['players'] : [];
+      List<dynamic> players = roomData['players'] ?? [];
+      Map<String, dynamic> playerNames =
+          Map<String, dynamic>.from(roomData['playerNames'] ?? {});
+      int maxPlayers = roomData['noOfPlayers'] ?? 2;
 
       if (players.contains(userId)) {
         print("User already in the room.");
         return;
       }
 
-      if (players.length >= 2) {
+      if (players.length >= maxPlayers) {
         print("Room is full.");
         return;
       }
 
-      // Add the new player's UID
       players.add(userId);
-      transaction.update(roomRef, {'players': players});
+      playerNames[userId] = userName;
 
-      print("User $userId joined room $roomNo");
+      transaction
+          .update(roomRef, {'players': players, 'playerNames': playerNames});
+      print("Updated playerNames: $playerNames");
     });
+  }
+
+  void startGame(int roomId) async {
+    FirebaseFirestore.instance
+        .collection('gameRooms')
+        .doc(roomId.toString())
+        .update({'gameStarted': true, 'gamePaused': false, 'currentTurn': 0});
+
+    print("Game started for room $roomId");
+  }
+
+  void endTurn(int roomId) async {
+    DocumentReference gameRef = FirebaseFirestore.instance
+        .collection('gameRooms')
+        .doc(roomId.toString());
+
+    await FirebaseFirestore.instance.runTransaction((transaction) async {
+      DocumentSnapshot snapshot = await transaction.get(gameRef);
+      if (!snapshot.exists) return;
+
+      Map<String, dynamic> gameData = snapshot.data() as Map<String, dynamic>;
+
+      List<String> players = List<String>.from(gameData['players'] ?? []);
+      List<String> spectators = List<String>.from(gameData['spectators'] ?? []);
+      int currentTurn = gameData['currentTurn'];
+
+      // Exclude spectators from turn
+      List<String> activePlayers =
+          players.where((p) => !spectators.contains(p)).toList();
+
+      if (activePlayers.isEmpty)
+        return; // Prevent crash if all players pressed BINGO
+
+      int nextTurnIndex = (activePlayers.indexOf(players[currentTurn]) + 1) %
+          activePlayers.length;
+
+      transaction.update(gameRef,
+          {'currentTurn': players.indexOf(activePlayers[nextTurnIndex])});
+    });
+
+    print("Turn updated for room $roomId");
+  }
+
+  void recordBingoPress(int roomId, String userId) async {
+    DocumentReference gameRef = FirebaseFirestore.instance
+        .collection('gameRooms')
+        .doc(roomId.toString());
+
+    await FirebaseFirestore.instance.runTransaction((transaction) async {
+      DocumentSnapshot snapshot = await transaction.get(gameRef);
+      if (!snapshot.exists) return;
+
+      Map<String, dynamic> gameData = snapshot.data() as Map<String, dynamic>;
+
+      bool bingoStarted =
+          gameData.containsKey('bingoStartTime'); // Check if timer exists
+      int currentTime =
+          DateTime.now().millisecondsSinceEpoch; // Get current timestamp
+
+      Map<String, dynamic> updatedData = {
+        'bingoReactionTimes.$userId':
+            currentTime - (gameData['bingoStartTime'] ?? currentTime),
+        'spectators': FieldValue.arrayUnion([userId]) // Mark user as spectator
+      };
+
+      // If no global timer exists, set it
+      if (!bingoStarted) {
+        updatedData['bingoStartTime'] = currentTime;
+      }
+
+      transaction.update(gameRef, updatedData);
+    });
+
+    print("User $userId pressed BINGO at global time.");
   }
 }

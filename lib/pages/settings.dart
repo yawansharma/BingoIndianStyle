@@ -1,3 +1,4 @@
+import 'package:bingo_indian_style/pages/login.dart';
 import 'package:bingo_indian_style/services/auth_service.dart';
 import 'package:flutter/material.dart';
 
@@ -16,9 +17,13 @@ class _SettingsState extends State<Settings> {
       body: Padding(
         padding: const EdgeInsets.fromLTRB(100, 100, 0, 0),
         child: GestureDetector(
-          onTap: () {
-            _auth.signout();
-            Navigator.pop(context);
+          onTap: () async {
+            await _auth.logoutWithGoogle(); // Wait for logout to complete
+            Navigator.pushAndRemoveUntil(
+              context,
+              MaterialPageRoute(builder: (context) => const LoginPage()),
+              (route) => false, // Remove all previous routes from stack
+            );
           },
           child: const Text('LOGOUT'),
         ),

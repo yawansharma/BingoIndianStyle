@@ -1,6 +1,7 @@
 // ignore_for_file: avoid_print
 import 'dart:math';
 import 'package:bingo_indian_style/services/game_service.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:bingo_indian_style/grids/Five/FiveLogic.dart';
 import 'package:bingo_indian_style/pages/play_page.dart';
@@ -21,6 +22,15 @@ class _FiveByFiveState extends State<FiveByFive> {
   List<bool> isPressed = List.generate(25, (index) => false);
   Color buttonColor = const Color.fromRGBO(255, 152, 129, 1);
   Color TextColor = const Color.fromRGBO(0, 0, 0, 1);
+  bool isMyTurn = false;
+  bool gamePaused = true;
+  String currentPlayerName = "Waiting...";
+  bool bingoTimerStarted = false;
+  DateTime? bingoStartTime;
+  bool hasPressedBingo = false;
+  int globalBingoStartTime = 0;
+  Map<String, int> bingoReactionTimes = {};
+
   final game = GameService();
 
   var logic = FiveLogic();
@@ -45,18 +55,141 @@ class _FiveByFiveState extends State<FiveByFive> {
           availableSquares =
               Map<String, bool>.from(snapshot.get('availableSquares') ?? {});
 
-          // Convert Firestore's availableSquares map to match player's grid
-          List<bool> isPressed = List.generate(25, (index) {
-            int num =
-                shuffledNumbers[index]; // Each player has a different shuffle
-            return availableSquares[num.toString()] ?? false;
-          });
+          int currentTurn = snapshot.get('currentTurn') ?? 0;
+          List<String> players =
+              List<String>.from(snapshot.get('players') ?? []);
+          List<String> spectators =
+              List<String>.from(snapshot.get('spectators') ?? []);
+          gamePaused = snapshot.get('gamePaused') ?? true;
+          bool gameStarted = snapshot.get('gameStarted') ?? false;
 
-          // Update logic for this player only
-          logicKey.currentState?.buttonPress(isPressed);
+          globalBingoStartTime = snapshot.data() != null &&
+                  snapshot.data()!.containsKey('bingoStartTime')
+              ? snapshot.get('bingoStartTime')
+              : 0;
+
+          bingoReactionTimes =
+              Map<String, int>.from(snapshot.get('bingoReactionTimes') ?? {});
+          String myUID = FirebaseAuth.instance.currentUser!.uid;
+
+          // Exclude spectators from turn logic
+          List<String> activePlayers =
+              players.where((p) => !spectators.contains(p)).toList();
+
+          isMyTurn = activePlayers.contains(myUID) &&
+              (activePlayers.indexOf(myUID) == currentTurn) &&
+              !gamePaused;
+
+          if (activePlayers.isNotEmpty && currentTurn < activePlayers.length) {
+            String currentTurnUID = activePlayers[currentTurn];
+
+            if (currentTurnUID == myUID) {
+              setState(() {
+                currentPlayerName = "You";
+              });
+            } else {
+              fetchPlayerName(currentTurnUID);
+            }
+          } else {
+            setState(() {
+              currentPlayerName = "Waiting...";
+            });
+          }
+
+          updateBingoState();
+
+          // Show Start Game Pop-up only for the host
+          String hostUID = players.isNotEmpty ? players[0] : "";
+          if (!gameStarted && myUID == hostUID) {
+            Future.delayed(Duration(milliseconds: 500), () {
+              if (mounted && ModalRoute.of(context)?.isCurrent == true) {
+                showStartGameDialog();
+              }
+            });
+          }
         });
       }
     });
+  }
+
+  void updateBingoState() {
+    List<bool> isPressed = List.generate(25, (index) {
+      int num = shuffledNumbers[index];
+      return availableSquares[num.toString()] ?? false;
+    });
+
+    logicKey.currentState?.buttonPress(isPressed); // Update the BINGO logic
+  }
+
+  void fetchPlayerName(String playerUID) async {
+    if (playerUID.isEmpty) {
+      setState(() {
+        currentPlayerName = "Waiting...";
+      });
+      return;
+    }
+
+    try {
+      DocumentSnapshot userSnapshot = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(playerUID)
+          .get();
+
+      print("Fetching name for UID: $playerUID");
+
+      if (userSnapshot.exists && userSnapshot.data() != null) {
+        String newName = userSnapshot['username'] ?? "Unknown Player";
+        print("Fetched Name: $newName");
+
+        if (currentPlayerName != newName) {
+          setState(() {
+            currentPlayerName = newName;
+          });
+        }
+      } else {
+        print("No username found for UID: $playerUID");
+        setState(() {
+          currentPlayerName = "Unknown Player";
+        });
+      }
+    } catch (e) {
+      print("Error fetching player name: $e");
+      setState(() {
+        currentPlayerName = "Unknown Player";
+      });
+    }
+  }
+
+  void showStartGameDialog() {
+    if (ModalRoute.of(context)?.isCurrent != true)
+      return; // Prevent multiple dialogs
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text("Start Game?"),
+          content: const Text(
+              "Not all players have joined. Do you want to start now?"),
+          actions: [
+            // TextButton(
+            //   onPressed: () {
+            //     Navigator.pop(context); // Close dialog, keep waiting
+            //   },
+            //   child: const Text("Wait"),
+            // ),
+            TextButton(
+              onPressed: () {
+                game.startGame(widget.roomId); // Start the game
+                Navigator.pop(context);
+              },
+              child: const Text("Start Now"),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   @override
@@ -73,7 +206,7 @@ class _FiveByFiveState extends State<FiveByFive> {
                     child: Expanded(child: FiveLogic(key: logicKey))),
                 SafeArea(
                   child: SizedBox(
-                    width: 200,
+                    width: 250,
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.start,
                       children: [
@@ -99,16 +232,12 @@ class _FiveByFiveState extends State<FiveByFive> {
                                             child: const Text('NO')),
                                         TextButton(
                                             onPressed: () {
-                                              print(
-                                                  'Navigate to Play page Start');
                                               Navigator.of(context)
                                                   .pushAndRemoveUntil(
                                                       MaterialPageRoute(
                                                           builder: (context) =>
                                                               BingoPlayPage()),
                                                       (route) => route.isFirst);
-                                              print(
-                                                  'Navigate to Play page End');
                                             },
                                             child: const Text('YES'))
                                       ],
@@ -123,7 +252,8 @@ class _FiveByFiveState extends State<FiveByFive> {
                             onPressed: () {},
                             icon: const Icon(Icons.photo_camera_outlined)),
                         IconButton(
-                            onPressed: () {}, icon: const Icon(Icons.settings))
+                            onPressed: () {}, icon: const Icon(Icons.settings)),
+                        Text('${widget.roomId}'),
                       ],
                     ),
                   ),
@@ -165,9 +295,21 @@ class _FiveByFiveState extends State<FiveByFive> {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(30, 0, 0, 10),
                   child: ElevatedButton(
-                      onPressed: () {
-                        print('Bingo Pressed');
-                      },
+                      onPressed:
+                          (logicKey.currentState?.completedSets ?? 0) >= 5 &&
+                                  !hasPressedBingo
+                              ? () {
+                                  String userId =
+                                      FirebaseAuth.instance.currentUser!.uid;
+                                  game.recordBingoPress(widget.roomId, userId);
+
+                                  setState(() {
+                                    hasPressedBingo = true;
+                                  });
+
+                                  print("User $userId pressed BINGO.");
+                                }
+                              : null,
                       style: ElevatedButton.styleFrom(
                           foregroundColor: Colors.black,
                           elevation:
@@ -187,6 +329,16 @@ class _FiveByFiveState extends State<FiveByFive> {
                               style: BorderStyle.solid)),
                       child: const Text('Bingo')),
                 ),
+                Text(
+                  isMyTurn
+                      ? "It's Your Turn, $currentPlayerName!"
+                      : "Waiting for $currentPlayerName...",
+                  style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.purple),
+                ),
+                const SizedBox(height: 10),
                 const Text('5x5',
                     style: TextStyle(fontFamily: 'MajorMono', fontSize: 24))
               ],
@@ -213,11 +365,30 @@ class _FiveByFiveState extends State<FiveByFive> {
                           : Colors.blue, // Change based on Firestore
                       alignment: Alignment.center,
                       child: TextButton(
-                        onPressed: () async {
-                          if (!isSelected) {
-                            game.updateAvailableSquares(widget.roomId, number);
-                          }
-                        },
+                        onPressed: isMyTurn && !gamePaused && !isSelected
+                            ? () async {
+                                game.updateAvailableSquares(
+                                    widget.roomId, number);
+
+                                // Update pressed states locally
+                                setState(() {
+                                  availableSquares[number.toString()] = true;
+                                });
+
+                                //Convert Firestore's availableSquares map to a boolean list
+                                List<bool> isPressed =
+                                    List.generate(25, (index) {
+                                  int num = shuffledNumbers[index];
+                                  return availableSquares[num.toString()] ??
+                                      false;
+                                });
+
+                                logicKey.currentState?.buttonPress(isPressed);
+
+                                game.endTurn(widget
+                                    .roomId); // Move to next player's turn
+                              }
+                            : null,
                         child: Text('$number'),
                       ),
                     );

@@ -10,10 +10,20 @@ import 'package:bingo_indian_style/grids/Seven/seven.dart';
 import 'package:bingo_indian_style/grids/Eight/eight.dart';
 // import 'package:bingo/src/screens/create_join.dart';
 
-class BingoPlayPage extends StatelessWidget {
+class BingoPlayPage extends StatefulWidget {
   BingoPlayPage({super.key});
+
+  @override
+  State<BingoPlayPage> createState() => _BingoPlayPageState();
+}
+
+class _BingoPlayPageState extends State<BingoPlayPage> {
   final game = GameService();
+
   final roomId = GameService().RoomNum();
+
+  late double noOfPlayers = 1.0;
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -53,7 +63,7 @@ class BingoPlayPage extends StatelessWidget {
                         height: 50,
                         child: ElevatedButton(
                           onPressed: () {
-                            game.createRoom(roomId, 5);
+                            game.createRoom(roomId, 5, noOfPlayers.toInt());
                             Navigator.of(context)
                                 .push(MaterialPageRoute(builder: (context) {
                               return FiveByFive(
@@ -78,7 +88,7 @@ class BingoPlayPage extends StatelessWidget {
                         height: 50,
                         child: ElevatedButton(
                           onPressed: () {
-                            game.createRoom(roomId, 6);
+                            game.createRoom(roomId, 6, noOfPlayers.toInt());
                             // Navigator.of(context)
                             //     .push(MaterialPageRoute(builder: (context) {
                             //   return const SixBySix();
@@ -114,7 +124,7 @@ class BingoPlayPage extends StatelessWidget {
                     height: 50,
                     child: ElevatedButton(
                       onPressed: () {
-                        game.createRoom(roomId, 7);
+                        game.createRoom(roomId, 7, noOfPlayers.toInt());
                         // Navigator.of(context)
                         //     .push(MaterialPageRoute(builder: (context) {
                         //   return const SevenBySeven();
@@ -136,7 +146,7 @@ class BingoPlayPage extends StatelessWidget {
                     height: 50,
                     child: ElevatedButton(
                       onPressed: () {
-                        game.createRoom(roomId, 8);
+                        game.createRoom(roomId, 8, noOfPlayers.toInt());
                         // Navigator.of(context)
                         //     .push(MaterialPageRoute(builder: (context) {
                         //   return const EightByEight();
@@ -156,6 +166,19 @@ class BingoPlayPage extends StatelessWidget {
                 ],
               ),
             ),
+          ),
+          Slider(
+            value: noOfPlayers,
+            max: 10,
+            min: 1,
+            onChanged: (players) {
+              setState(() {
+                noOfPlayers = players;
+              });
+              print(noOfPlayers);
+            },
+            divisions: 9,
+            label: noOfPlayers.toStringAsFixed(0),
           )
         ],
       ),
