@@ -2,6 +2,9 @@
 // File: lib/services/game_service.dart
 
 import 'dart:math';
+import 'package:bingo_indian_style/grids/Eight/eight.dart';
+import 'package:bingo_indian_style/grids/Seven/seven.dart';
+import 'package:bingo_indian_style/grids/Six/six.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -106,7 +109,8 @@ class GameService implements GameRepository {
           transaction.update(gameRoomRef, {'gamePaused': true});
         }
         if (players.isEmpty) {
-          transaction.update(gameRoomRef, {'gamePaused': true});
+          transaction.update(
+              gameRoomRef, {'gamePaused': true, 'showLeaderboard': true});
         }
       }
     });
@@ -175,26 +179,37 @@ class GameService implements GameRepository {
       throw Exception("Room not found: $roomIdString");
     }
 
+    Map<String, dynamic> gameData = roomSnapshot.data() as Map<String, dynamic>;
+    int gridSize = gameData.containsKey('gridSize')
+        ? gameData['gridSize']
+        : 5; // Default to 5x5
+    List<String> players = List<String>.from(gameData['players'] ?? []);
+    List<String> spectators = List<String>.from(gameData['spectators'] ?? []);
+
     DocumentReference gameRoomRef =
         _firestore.collection('gameRooms').doc(roomIdString);
+
     await _firestore.runTransaction((transaction) async {
       DocumentSnapshot snapshot = await transaction.get(gameRoomRef);
-      Map<String, dynamic> gameData = snapshot.data() as Map<String, dynamic>;
-      List<String> players = List<String>.from(gameData['players'] ?? []);
-      List<String> spectators = List<String>.from(gameData['spectators'] ?? []);
+      Map<String, dynamic> updatedGameData =
+          snapshot.data() as Map<String, dynamic>;
+      List<String> updatedPlayers =
+          List<String>.from(updatedGameData['players'] ?? []);
+      List<String> updatedSpectators =
+          List<String>.from(updatedGameData['spectators'] ?? []);
 
-      if (!players.contains(_auth.currentUser!.uid) &&
-          !spectators.contains(_auth.currentUser!.uid)) {
-        int maxPlayers = gameData.containsKey('maxPlayers')
-            ? gameData['maxPlayers']
-            : 7; // Default maxPlayers to 7 if not set
+      int maxPlayers = updatedGameData.containsKey('maxPlayers')
+          ? updatedGameData['maxPlayers']
+          : 7; // Default maxPlayers to 7 if not set
 
-        if (players.length < maxPlayers) {
-          players.add(_auth.currentUser!.uid);
-          transaction.update(gameRoomRef, {'players': players});
+      if (!updatedPlayers.contains(_auth.currentUser!.uid) &&
+          !updatedSpectators.contains(_auth.currentUser!.uid)) {
+        if (updatedPlayers.length < maxPlayers) {
+          updatedPlayers.add(_auth.currentUser!.uid);
+          transaction.update(gameRoomRef, {'players': updatedPlayers});
         } else {
-          spectators.add(_auth.currentUser!.uid);
-          transaction.update(gameRoomRef, {'spectators': spectators});
+          updatedSpectators.add(_auth.currentUser!.uid);
+          transaction.update(gameRoomRef, {'spectators': updatedSpectators});
 
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -204,11 +219,28 @@ class GameService implements GameRepository {
       }
     });
 
+    // Navigate to the appropriate game screen based on `gridSize`
+    Widget gameScreen;
+    switch (gridSize) {
+      case 5:
+        gameScreen = FiveByFive(roomId: roomIdString);
+        break;
+      case 6:
+        gameScreen = SixBySix(roomId: roomIdString);
+        break;
+      case 7:
+        gameScreen = SevenBySeven(roomId: roomIdString);
+        break;
+      case 8:
+        gameScreen = EightByEight(roomId: roomIdString);
+        break;
+      default:
+        throw Exception("Unsupported grid size: $gridSize");
+    }
+
     Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (context) => FiveByFive(roomId: roomIdString),
-      ),
+      MaterialPageRoute(builder: (context) => gameScreen),
     );
   }
 
