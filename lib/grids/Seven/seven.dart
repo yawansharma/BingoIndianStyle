@@ -1,274 +1,523 @@
-// ignore_for_file: avoid_print
-import 'package:bingo_indian_style/grids/Seven/SevenLogic.dart';
-import 'package:bingo_indian_style/pages/play_page.dart';
-import 'package:flutter/material.dart';
+// seven_by_seven_page.dart
+// File: lib/pages/seven_by_seven_page.dart
 
+// ignore_for_file: avoid_print
+
+import 'package:bingo_indian_style/services/game_service.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/material.dart';
+import 'package:bingo_indian_style/grids/Seven/SevenLogic.dart'; // Assuming you have SevenLogic
+import 'package:bingo_indian_style/pages/play_page.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+
+// --- BingoGrid Widget (Reused - No Changes Needed from six_by_six_page.dart) ---
+class BingoGrid extends StatelessWidget {
+  final List<int> shuffledNumbers;
+  final Map<String, bool> availableSquares;
+  final bool isMyTurn;
+  final bool gamePaused;
+  final bool isSpectator;
+  final Function(int) onSquareTap;
+
+  const BingoGrid({
+    Key? key,
+    required this.shuffledNumbers,
+    required this.availableSquares,
+    required this.isMyTurn,
+    required this.gamePaused,
+    required this.onSquareTap,
+    this.isSpectator = false,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 335, // Increased width for 7x7 grid to fit better
+      height: 400, // Increased height for 7x7 grid to fit better
+      child: GridView.builder(
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 7), // Correct 7x7 grid
+        itemCount: 49, // Correct item count for 7x7 grid
+        itemBuilder: (context, index) {
+          int number = shuffledNumbers[index];
+          bool isSelected = availableSquares[number.toString()] ?? false;
+          return InkWell(
+            onTap: (isMyTurn && !gamePaused && !isSelected && !isSpectator)
+                ? () => onSquareTap(number)
+                : null,
+            child: Container(
+              margin: const EdgeInsets.all(
+                  1), // Further reduced margin for even smaller squares
+              decoration: BoxDecoration(
+                color: isSelected ? Colors.red : Colors.blue,
+                borderRadius: BorderRadius.circular(
+                    3), // Optional: Slightly rounded corners for squares
+              ),
+              alignment: Alignment.center,
+              child: Text(
+                '$number',
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12), // Adjusted font size for smaller squares
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+// --- SevenBySeven Widget ---
 class SevenBySeven extends StatefulWidget {
-  const SevenBySeven({super.key});
+  final String roomId;
+  const SevenBySeven({Key? key, required this.roomId}) : super(key: key);
 
   @override
   State<SevenBySeven> createState() => _SevenBySevenState();
 }
 
 class _SevenBySevenState extends State<SevenBySeven> {
-  List<Color> iconColors = List.generate(49, (index) => Colors.blue);
-  List<bool> isPressed = List.generate(49, (index) => false);
-  Color buttonColor = const Color.fromRGBO(255, 152, 129, 1);
-  Color TextColor = const Color.fromRGBO(0, 0, 0, 1);
+  List<int> shuffledNumbers = [];
+  Map<String, bool> availableSquares = {};
+  String currentPlayerName = "Waiting...";
+  bool isMyTurn = false;
+  bool gamePaused = true;
+  bool hasPressedBingo = false;
+  bool isSpectator = false;
 
-  var logic = Sevenlogic();
-  final GlobalKey<SevenlogicState> logicKey = GlobalKey<SevenlogicState>();
+  final GameService _gameService = GameService();
+  final GlobalKey<SevenlogicState> _logicKey =
+      GlobalKey<SevenlogicState>(); // Changed Logic Key to SevenLogicState
+
+  @override
+  void initState() {
+    super.initState();
+    _initializeGame();
+    _listenToGameUpdates();
+  }
+
+  Future<void> _initializeGame() async {
+    shuffledNumbers = List.generate(49, (index) => index + 1)
+      ..shuffle(); // 49 numbers for 7x7
+  }
+
+  void _listenToGameUpdates() {
+    FirebaseFirestore.instance
+        .collection('gameRooms')
+        .doc(widget.roomId.toString())
+        .snapshots()
+        .listen(_processGameSnapshot, onError: _handleGameUpdateError);
+  }
+
+  void _processGameSnapshot(DocumentSnapshot snapshot) {
+    if (!snapshot.exists) {
+      print("Game room not found: ${widget.roomId}");
+      return;
+    }
+
+    final gameData = snapshot.data() as Map<String, dynamic>?;
+    if (gameData == null) return;
+
+    print(
+        "Game Data Update (7x7): gamePaused = ${gameData['gamePaused']}, currentTurn = ${gameData['currentTurn']}, players = ${gameData['players']}, spectators = ${gameData['spectators']}"); // ADDED LOGGING
+
+    _updateGameStateFromSnapshot(gameData);
+    _updateCurrentPlayerName(gameData);
+    _updateBingoState();
+    _checkAndShowStartGameDialog(gameData);
+    _checkAndShowLeaderboard(gameData);
+  }
+
+  void _handleGameUpdateError(error) {
+    print("Error listening to game updates: $error");
+  }
+
+  void _updateGameStateFromSnapshot(Map<String, dynamic> gameData) {
+    setState(() {
+      availableSquares =
+          Map<String, bool>.from(gameData['availableSquares'] ?? {});
+      gamePaused = gameData['gamePaused'] ?? true;
+      isSpectator = _determineIsSpectator(gameData);
+      isMyTurn = _determineIsMyTurn(gameData);
+    });
+  }
+
+  bool _determineIsSpectator(Map<String, dynamic> gameData) {
+    List<String> spectators = List<String>.from(gameData['spectators'] ?? []);
+    String myUID = FirebaseAuth.instance.currentUser!.uid;
+    return spectators.contains(myUID);
+  }
+
+  bool _determineIsMyTurn(Map<String, dynamic> gameData) {
+    if (isSpectator) return false;
+
+    int currentTurn = gameData['currentTurn'] ?? 0;
+    List<String> players = List<String>.from(gameData['players'] ?? []);
+    List<String> spectators = List<String>.from(gameData['spectators'] ?? []);
+    String myUID = FirebaseAuth.instance.currentUser!.uid;
+
+    List<String> activePlayers =
+        players.where((p) => !spectators.contains(p)).toList();
+    return activePlayers.contains(myUID) &&
+        (activePlayers.indexOf(myUID) == currentTurn) &&
+        !gamePaused;
+  }
+
+  void _updateCurrentPlayerName(Map<String, dynamic> gameData) {
+    int currentTurn = gameData['currentTurn'] ?? 0;
+    List<String> players = List<String>.from(gameData['players'] ?? []);
+    List<String> activePlayers = players
+        .where(
+            (p) => !List<String>.from(gameData['spectators'] ?? []).contains(p))
+        .toList();
+
+    if (activePlayers.isNotEmpty && currentTurn < activePlayers.length) {
+      String currentTurnUID = activePlayers[currentTurn];
+      if (currentTurnUID == FirebaseAuth.instance.currentUser!.uid) {
+        _setPlayerNameToUI("You");
+      } else {
+        _fetchPlayerName(currentTurnUID);
+      }
+    } else {
+      _setPlayerNameToUI("Waiting...");
+    }
+  }
+
+  void _setPlayerNameToUI(String name) {
+    if (currentPlayerName != name) {
+      setState(() {
+        currentPlayerName = name;
+      });
+    }
+  }
+
+  void _updateBingoState() {
+    List<bool> pressedStates = List.generate(49, (index) {
+      // Updated to 49 for 7x7
+      int num = shuffledNumbers[index];
+      return availableSquares[num.toString()] ?? false;
+    });
+    _logicKey.currentState?.buttonPress(pressedStates);
+  }
+
+  Future<void> _fetchPlayerName(String playerUID) async {
+    if (playerUID.isEmpty) {
+      _setPlayerNameToUI("Waiting...");
+      return;
+    }
+    try {
+      DocumentSnapshot userSnapshot = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(playerUID)
+          .get();
+
+      if (userSnapshot.exists && userSnapshot.data() != null) {
+        String newName = userSnapshot['username'] ?? "Unknown Player";
+        _setPlayerNameToUI(newName);
+      } else {
+        _setPlayerNameToUI("Unknown Player");
+      }
+    } catch (e) {
+      print("Error fetching player name: $e");
+      _setPlayerNameToUI("Unknown Player");
+    }
+  }
+
+  void _checkAndShowStartGameDialog(Map<String, dynamic> gameData) {
+    bool gameStarted = gameData['gameStarted'] ?? false;
+    List<String> players = List<String>.from(gameData['players'] ?? []);
+    String hostUID = players.isNotEmpty ? players[0] : "";
+    String myUID = FirebaseAuth.instance.currentUser!.uid;
+
+    if (!gameStarted && myUID == hostUID) {
+      Future.delayed(const Duration(milliseconds: 500), () {
+        if (mounted && ModalRoute.of(context)?.isCurrent == true) {
+          _showStartGameDialog();
+        }
+      });
+    }
+  }
+
+  void _checkAndShowLeaderboard(Map<String, dynamic> gameData) {
+    Map<String, int> reactionTimes =
+        Map<String, int>.from(gameData['bingoReactionTimes'] ?? {});
+    List<String> players = List<String>.from(gameData['players'] ?? []);
+    List<String> spectators = List<String>.from(gameData['spectators'] ?? []);
+    List<String> activePlayers = players
+        .where(
+            (p) => !List<String>.from(gameData['spectators'] ?? []).contains(p))
+        .toList();
+
+    if ((gameData['showLeaderboard'] ?? false) &&
+        players.isEmpty &&
+        spectators.isNotEmpty) {
+      _showLeaderboardDialog(reactionTimes);
+    }
+  }
+
+  void _showStartGameDialog() {
+    if (!mounted || ModalRoute.of(context)?.isCurrent != true) return;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) => AlertDialog(
+        title: const Text("Start Game?"),
+        content: const Text(
+            "Not all players have joined. Do you want to start now?"),
+        actions: [
+          TextButton(
+            onPressed: () {
+              _gameService.startGame(widget.roomId);
+              Navigator.pop(context);
+            },
+            child: const Text("Start Now"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showLeaderboardDialog(
+      Map<String, int> bingoReactionTimes) async {
+    if (!mounted) return;
+
+    List<MapEntry<String, int>> sortedEntries = bingoReactionTimes.entries
+        .toList()
+      ..sort((a, b) => a.value.compareTo(b.value));
+
+    List<Map<String, String>> leaderboard = [];
+    for (var entry in sortedEntries) {
+      String playerUID = entry.key;
+      int reactionTime = entry.value;
+      String playerName = await _getPlayerNameFromUID(playerUID);
+      leaderboard.add({'name': playerName, 'time': '${reactionTime / 1000}s'});
+    }
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) => AlertDialog(
+        title: const Text("🏆 Leaderboard"),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: leaderboard
+              .map((entry) => Text("${entry['name']} - ${entry['time']}"))
+              .toList(),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              await _gameService.deleteRoom(widget.roomId);
+              Navigator.pop(context);
+              Navigator.pop(context);
+            },
+            child: const Text("OK"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<String> _getPlayerNameFromUID(String playerUID) async {
+    try {
+      DocumentSnapshot userSnapshot = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(playerUID)
+          .get();
+      return userSnapshot.exists
+          ? (userSnapshot['username'] ?? "Unknown Player")
+          : "Unknown Player";
+    } catch (e) {
+      print("Error fetching player name for leaderboard: $e");
+      return "Unknown Player";
+    }
+  }
+
+  void _handleGridSquareTap(int number) async {
+    if (!isMyTurn || gamePaused || isSpectator) return;
+
+    await _gameService.updateAvailableSquares(widget.roomId, number);
+    setState(() {
+      availableSquares[number.toString()] = true;
+    });
+    _updateBingoState();
+    await _gameService.endTurn(widget.roomId);
+  }
+
+  void _handleBingoButtonPress() {
+    if ((_logicKey.currentState?.completedSets ?? 0) >=
+            7 && // Bingo condition for 7x7 (adjust if needed)
+        !hasPressedBingo &&
+        !isSpectator) {
+      String userId = FirebaseAuth.instance.currentUser!.uid;
+      _gameService.recordBingoPress(widget.roomId, userId);
+      setState(() {
+        hasPressedBingo = true;
+        isSpectator = true;
+      });
+      print("User $userId pressed BINGO and became a spectator.");
+    }
+  }
+
+  Future<void> _leaveGameRoom() async {
+    // ... (No changes in this method) ...
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: Row(
         children: [
-          Column(
-            children: [
-              Container(
-                  width: 0,
-                  height: 0,
-                  child: Expanded(child: Sevenlogic(key: logicKey))),
-              SafeArea(
-                child: SizedBox(
-                  width: 200,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.start,
+          Expanded(
+            child: Column(
+              children: [
+                Container(
+                    height: 0,
+                    width: 0,
+                    child: Expanded(
+                        child: Sevenlogic(
+                            key: _logicKey))), // Changed SixLogic to SevenLogic
+                SafeArea(
+                  child: SizedBox(
+                    width: 250,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.start,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.arrow_back_ios_new),
+                          onPressed: _leaveGameRoom,
+                        ),
+                        IconButton(
+                          onPressed: () {},
+                          icon: const Icon(Icons.dashboard_rounded),
+                        ),
+                        IconButton(
+                          onPressed: () {},
+                          icon: const Icon(Icons.photo_camera_outlined),
+                        ),
+                        IconButton(
+                          onPressed: () {},
+                          icon: const Icon(Icons.settings),
+                        ),
+                        Text('${widget.roomId}'),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(30, 0, 0, 0),
+                  child: Stack(
+                    alignment: Alignment.topCenter,
                     children: [
-                      IconButton(
-                          onPressed: () {
-                            showDialog(
-                                context: context,
-                                builder: (context) {
-                                  return AlertDialog(
-                                    title: const Text(
-                                        'Do you want to leave the Game?'),
-                                    actions: [
-                                      TextButton(
-                                          onPressed: () {
-                                            Navigator.of(context).pop(
-                                                MaterialPageRoute(
-                                                    builder: (context) {
-                                              return const SevenBySeven();
-                                            }));
-                                          },
-                                          child: const Text('NO')),
-                                      TextButton(
-                                          onPressed: () {
-                                            Navigator.of(context)
-                                                .pushAndRemoveUntil(
-                                                    MaterialPageRoute(
-                                                        builder: (context) =>
-                                                            BingoPlayPage()),
-                                                    (route) => route.isFirst);
-                                          },
-                                          child: const Text('YES'))
-                                    ],
-                                  );
-                                });
-                          },
-                          icon: const Icon(Icons.arrow_back_ios_new)),
-                      IconButton(
-                          onPressed: () {},
-                          icon: const Icon(Icons.dashboard_rounded)),
-                      IconButton(
-                          onPressed: () {},
-                          icon: const Icon(Icons.photo_camera_outlined)),
-                      IconButton(
-                          onPressed: () {}, icon: const Icon(Icons.settings))
+                      Padding(
+                        padding: EdgeInsets.symmetric(vertical: 20),
+                        child: Text(
+                          'INDIAN STYLE',
+                          style: TextStyle(
+                              fontFamily: 'Qahiri',
+                              fontSize: 45,
+                              color: Color.fromRGBO(255, 152, 129, 1)),
+                        ),
+                      ),
+                      SizedBox(height: 0),
+                      Text(
+                        'BINGO',
+                        style: TextStyle(
+                          fontFamily: 'Rammetto',
+                          fontSize: 30,
+                        ),
+                      ),
                     ],
                   ),
                 ),
-              ),
-              const SizedBox(
-                height: 20,
-              ),
-              const Padding(
-                padding: EdgeInsets.fromLTRB(30, 0, 0, 0),
-                child: Stack(
-                  alignment: Alignment.topCenter,
-                  children: [
-                    Padding(
-                      padding: EdgeInsets.symmetric(vertical: 20),
-                      child: Text(
-                        'INDIAN STYLE',
-                        style: TextStyle(
-                            fontFamily: 'Qahiri',
-                            fontSize: 45,
-                            color: Color.fromRGBO(255, 152, 129, 1)),
-                      ),
-                    ),
-                    SizedBox(
-                      height: 00,
-                    ),
-                    Text(
-                      'BINGO',
-                      style: TextStyle(
-                        fontFamily: 'Rammetto',
-                        fontSize: 30,
-                      ),
-                    ),
-                  ],
+                const SizedBox(height: 20),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(30, 0, 0, 10),
+                  child: ElevatedButton(
+                      onPressed: _handleBingoButtonPress,
+                      style: ElevatedButton.styleFrom(
+                          foregroundColor: Colors.black,
+                          elevation:
+                              (_logicKey.currentState?.completedSets ?? 0) >= 7
+                                  ? 10
+                                  : 0,
+                          shape: const RoundedRectangleBorder(
+                              borderRadius:
+                                  BorderRadius.all(Radius.circular(20))),
+                          side: BorderSide(
+                              color: (_logicKey.currentState?.completedSets ??
+                                          0) >=
+                                      7
+                                  ? Colors.purple.shade800
+                                  : Colors.black,
+                              width: 5,
+                              style: BorderStyle.solid)),
+                      child: const Text('Bingo')),
                 ),
-              ),
-              const SizedBox(
-                height: 20,
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(30, 0, 0, 10),
-                child: ElevatedButton(
-                    onPressed: () {
-                      print('Bingo Pressed');
-                    },
-                    style: ElevatedButton.styleFrom(
-                        foregroundColor: Colors.black,
-                        elevation: 10,
-                        shape: const RoundedRectangleBorder(
-                            borderRadius:
-                                BorderRadius.all(Radius.circular(20))),
-                        side: BorderSide(
-                            color: buttonColor,
-                            width: 5,
-                            style: BorderStyle.solid)),
-                    child: const Text('Bingo')),
-              ),
-              const Text('7x7',
-                  style: TextStyle(fontFamily: 'MajorMono', fontSize: 24))
-            ],
+                Text(
+                  isMyTurn
+                      ? "It's Your Turn, $currentPlayerName!"
+                      : isSpectator
+                          ? "$currentPlayerName is a Spectator"
+                          : "Waiting for $currentPlayerName...",
+                  style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: isSpectator ? Colors.grey : Colors.purple),
+                ),
+                const SizedBox(height: 10),
+                const Text('7x7', // Updated to 7x7 Grid Size Text
+                    style: TextStyle(fontFamily: 'MajorMono', fontSize: 24))
+              ],
+            ),
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(80, 10, 0, 10),
-            child: SizedBox(
-              width: 300,
-              height: 400,
-              child: InkWell(
-                child: GridView.builder(
-                    gridDelegate:
-                        const SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: 7),
-                    itemCount: 49,
-                    itemBuilder: (context, index) {
-                      return Container(
-                          margin: const EdgeInsets.all(3),
-                          color: iconColors[index],
-                          alignment: Alignment.center,
-                          child: TextButton(
-                              onPressed: () {
-                                setState(() {
-                                  if (!isPressed[index]) {
-                                    iconColors[index] = Colors.red;
-                                    isPressed[index] = true;
-
-                                    logicKey.currentState
-                                        ?.buttonPress(isPressed);
-
-                                    var completed =
-                                        logicKey.currentState?.completedSets ??
-                                            0;
-
-                                    if (completed >= 7) {
-                                      buttonColor = Colors.red;
-                                    }
-                                  }
-                                });
-                              },
-                              child: Text(
-                                '${index + 1}',
-                                style: const TextStyle(fontSize: 10),
-                              )));
-                    }),
-              ),
+            child: BingoGrid(
+              // BingoGrid Widget Here
+              shuffledNumbers: shuffledNumbers,
+              availableSquares: availableSquares,
+              isMyTurn: isMyTurn,
+              gamePaused: gamePaused,
+              isSpectator: isSpectator,
+              onSquareTap: _handleGridSquareTap,
             ),
           ),
           SizedBox(
             width: 80,
-            height: 300,
+            height: 400,
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(10, 0, 0, 0),
+              padding: const EdgeInsets.fromLTRB(10, 40, 0, 0),
               child: Column(
                 children: [
-                  Text(
-                    'B',
-                    style: TextStyle(
-                      fontSize: 20,
-                      color: (logicKey.currentState?.completedSets ?? 0) >= 1
-                          ? Colors.green
-                          : Colors.black,
-                    ),
-                  ),
-                  const SizedBox(
-                    height: 15,
-                  ),
-                  Text(
-                    'I',
-                    style: TextStyle(
-                      fontSize: 20,
-                      color: (logicKey.currentState?.completedSets ?? 0) >= 2
-                          ? Colors.green
-                          : Colors.black,
-                    ),
-                  ),
-                  const SizedBox(
-                    height: 15,
-                  ),
-                  Text(
-                    'N',
-                    style: TextStyle(
-                      fontSize: 20,
-                      color: (logicKey.currentState?.completedSets ?? 0) >= 3
-                          ? Colors.green
-                          : Colors.black,
-                    ),
-                  ),
-                  const SizedBox(
-                    height: 15,
-                  ),
-                  Text(
-                    'G',
-                    style: TextStyle(
-                      fontSize: 20,
-                      color: (logicKey.currentState?.completedSets ?? 0) >= 4
-                          ? Colors.green
-                          : Colors.black,
-                    ),
-                  ),
-                  const SizedBox(
-                    height: 15,
-                  ),
-                  Text(
-                    'O',
-                    style: TextStyle(
-                      fontSize: 20,
-                      color: (logicKey.currentState?.completedSets ?? 0) >= 5
-                          ? Colors.green
-                          : Colors.black,
-                    ),
-                  ),
-                  const SizedBox(
-                    height: 15,
-                  ),
-                  Text(
-                    'S',
-                    style: TextStyle(
-                      fontSize: 20,
-                      color: (logicKey.currentState?.completedSets ?? 0) >= 6
-                          ? Colors.green
-                          : Colors.black,
-                    ),
-                  ),
-                  const SizedBox(
-                    height: 15,
-                  ),
-                  Text(
-                    '!!',
-                    style: TextStyle(
-                      fontSize: 20,
-                      color: (logicKey.currentState?.completedSets ?? 0) >= 7
-                          ? Colors.green
-                          : Colors.black,
-                    ),
-                  ),
+                  _buildBingoLetter(
+                      'B', (_logicKey.currentState?.completedSets ?? 0) >= 1),
+                  const SizedBox(height: 20),
+                  _buildBingoLetter(
+                      'I', (_logicKey.currentState?.completedSets ?? 0) >= 2),
+                  const SizedBox(height: 20),
+                  _buildBingoLetter(
+                      'N', (_logicKey.currentState?.completedSets ?? 0) >= 3),
+                  const SizedBox(height: 20),
+                  _buildBingoLetter(
+                      'G', (_logicKey.currentState?.completedSets ?? 0) >= 4),
+                  const SizedBox(height: 20),
+                  _buildBingoLetter(
+                      'O', (_logicKey.currentState?.completedSets ?? 0) >= 5),
+                  const SizedBox(height: 20),
+                  _buildBingoLetter(
+                      'S',
+                      (_logicKey.currentState?.completedSets ?? 0) >=
+                          6), // Added 'O' for 7th letter
+                  const SizedBox(height: 20),
+                  _buildBingoLetter(
+                      '!!',
+                      (_logicKey.currentState?.completedSets ?? 0) >=
+                          7), // Added 'S' for 7th letter
+                  const SizedBox(height: 20),
                 ],
               ),
             ),
@@ -278,14 +527,28 @@ class _SevenBySevenState extends State<SevenBySeven> {
             child: Row(
               children: [
                 IconButton(
-                    onPressed: () {}, icon: const Icon(Icons.mic_outlined)),
+                  onPressed: () {},
+                  icon: const Icon(Icons.mic_outlined),
+                ),
                 IconButton(
-                    onPressed: () {},
-                    icon: const Icon(Icons.mark_chat_unread_rounded)),
+                  onPressed: () {},
+                  icon: const Icon(Icons.mark_chat_unread_rounded),
+                ),
               ],
             ),
           )
         ],
+      ),
+    );
+  }
+
+  Widget _buildBingoLetter(String letter, bool isCompleted) {
+    return Text(
+      letter,
+      style: TextStyle(
+        fontSize: 20,
+        fontWeight: FontWeight.bold,
+        color: isCompleted ? Colors.green : Colors.black,
       ),
     );
   }
