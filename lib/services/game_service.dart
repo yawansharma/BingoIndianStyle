@@ -154,7 +154,8 @@ class GameService implements GameRepository {
         return;
       }
 
-      if (players.isEmpty) {
+      if (players.isEmpty && spectators.isEmpty) {
+        // Delete the room if no players or spectators are left
         transaction.delete(gameRoomRef);
       } else {
         int currentTurn = gameData['currentTurn'] ?? 0;
